@@ -313,10 +313,10 @@ class DFJSP_GANTT_CHART():
         plt.figure(figsize=((self.total_n_job * 1.5, self.number_of_machines)))
         y_value = list(range(1, 21))
 
-        plt.xlabel('Makespan', size=20, fontdict={'family': 'SimSun'})
-        plt.ylabel('机器号', size=20, fontdict={'family': 'SimSun'})
-        plt.yticks(y_value, fontproperties='Times New Roman', size=20)
-        plt.xticks(fontproperties='Times New Roman', size=20)
+        plt.xlabel('Makespan', size=20)
+        plt.ylabel('Machine ID', size=20)
+        plt.yticks(y_value, size=20)
+        plt.xticks(size=20)
 
 
     def gantt_plt(self,job, operation, mach_a, start_time, dur_a,number_of_jobs):

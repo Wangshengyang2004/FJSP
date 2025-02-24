@@ -13,6 +13,14 @@ import matplotlib.pyplot as plt
 from utils.device_utils import get_best_device
 import os
 
+# Set matplotlib to use a backend that doesn't require a display
+import matplotlib
+matplotlib.use('Agg')
+
+# Configure default font settings
+plt.rcParams['font.family'] = 'DejaVu Sans'
+plt.rcParams['font.size'] = 12
+
 # Get device once at module level
 DEVICE = get_best_device()
 
@@ -80,12 +88,16 @@ def validate(vali_set,batch_size, policy_jo,policy_mc):
 
                 j += 1
                 if env.done():
-                    # Save the Gantt chart
-                    plt.title(f'Instance {i+1} - Makespan: {env.mchsEndTimes.max(-1).max(-1)[0]:.2f}')
+                    # Save the Gantt chart with proper styling
+                    plt.title(f'Instance {i+1} - Makespan: {env.mchsEndTimes.max(-1).max(-1)[0]:.2f}', pad=20)
+                    plt.grid(True, axis='x', linestyle='--', alpha=0.7)
+                    plt.tight_layout()
                     plt.savefig(os.path.join(gantt_dir, f'gantt_chart_instance_{i+1}.png'), 
                               format='png', 
-                              dpi=300, 
-                              bbox_inches='tight')
+                              dpi=150, 
+                              bbox_inches='tight',
+                              facecolor='white',
+                              edgecolor='none')
                     plt.close()  # Close the figure to free memory
                     break
             cost = env.mchsEndTimes.max(-1).max(-1)
