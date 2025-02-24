@@ -14,8 +14,42 @@ from epsGreedyForMch import PredictMch
 import os
 import platform
 from utils.device_utils import get_best_device
+import gc
 
-device = get_best_device()
+def get_gpu_with_most_memory():
+    """Get the GPU device with the most available memory."""
+    if not torch.cuda.is_available():
+        return get_best_device()
+        
+    # Get the number of available GPUs
+    n_gpus = torch.cuda.device_count()
+    if n_gpus == 0:
+        return get_best_device()
+        
+    # Find GPU with most free memory
+    max_free_memory = 0
+    selected_gpu = 0
+    
+    for i in range(n_gpus):
+        torch.cuda.set_device(i)
+        torch.cuda.empty_cache()
+        free_memory = torch.cuda.get_device_properties(i).total_memory - torch.cuda.memory_allocated(i)
+        if free_memory > max_free_memory:
+            max_free_memory = free_memory
+            selected_gpu = i
+            
+    print(f"\nSelected GPU {selected_gpu} with {max_free_memory/1024**3:.2f} GB free memory")
+    return torch.device(f"cuda:{selected_gpu}")
+
+# Configure PyTorch memory management
+torch.cuda.empty_cache()
+if torch.cuda.is_available():
+    # Enable memory efficient features
+    torch.backends.cudnn.benchmark = True
+    os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:512,expandable_segments:True'
+
+# Get the best GPU device
+device = get_gpu_with_most_memory()
 print(f"Using device: {device}")
 
 from torch.utils.data import DataLoader
@@ -282,6 +316,11 @@ class PPO:
 
 
 def main(epochs):
+    # Add memory management
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        gc.collect()
+    
     from uniform_instance import FJSPDataset
     from FJSP_Env import FJSP
 
@@ -292,6 +331,13 @@ def main(epochs):
                                  [configs.batch_size, configs.n_j * configs.n_m, configs.n_j * configs.n_m]),
                              n_nodes=configs.n_j * configs.n_m,
                              device=device)
+
+    # Reduce batch size if memory is constrained
+    if torch.cuda.is_available():
+        total_memory = torch.cuda.get_device_properties(device).total_memory
+        if total_memory < 8 * 1024**3:  # Less than 8GB
+            configs.batch_size = configs.batch_size // 2
+            print(f"Reduced batch size to {configs.batch_size} due to GPU memory constraints")
 
     ppo = PPO(configs.lr, configs.gamma, configs.k_epochs, configs.eps_clip,
               n_j=configs.n_j,
@@ -305,13 +351,18 @@ def main(epochs):
               hidden_dim_actor=configs.hidden_dim_actor,
               num_mlp_layers_critic=configs.num_mlp_layers_critic,
               hidden_dim_critic=configs.hidden_dim_critic)
+
+    # Move model to device
+    ppo.policy_job.to(device)
+    ppo.policy_mch.to(device)
+    ppo.policy_old_job.to(device)
+    ppo.policy_old_mch.to(device)
+
     train_dataset = FJSPDataset(configs.n_j, configs.n_m, configs.low, configs.high, configs.num_ins, 200)
     validat_dataset = FJSPDataset(configs.n_j, configs.n_m, configs.low, configs.high, 128, 200)
 
     data_loader = DataLoader(train_dataset, batch_size=configs.batch_size)
     valid_loader = DataLoader(validat_dataset, batch_size=configs.batch_size)
-    '''ppo.policy_old_job.to(device)
-    ppo.policy_old_mch.to(device)'''
 
     record = 1000000
     for epoch in range(epochs):
