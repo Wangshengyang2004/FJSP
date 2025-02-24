@@ -129,7 +129,13 @@ if __name__ == '__main__':
     
     print(f"\nUsing device: {DEVICE}")
     
-    ppo = PPO(configs.lr, configs.gamma, configs.k_epochs, configs.eps_clip,
+    # Initialize PPO with correct parameters
+    ppo = PPO(rank=0,  # Use rank 0 for single GPU validation
+              world_size=1,  # Single process validation
+              lr=configs.lr,
+              gamma=configs.gamma,
+              k_epochs=configs.k_epochs,
+              eps_clip=configs.eps_clip,
               n_j=N_JOBS_P,
               n_m=N_MACHINES_P,
               num_layers=configs.num_layers,
@@ -144,20 +150,12 @@ if __name__ == '__main__':
 
     filepath = 'saved_network'
     filepath = os.path.join(filepath, 'FJSP_J%sM%s' % (30,configs.n_m))
-    #filepath = os.path.join(filepath, '%s_%s' % (0,239))
     filepath = os.path.join(filepath, 'best_value0')
 
     job_path = './{}.pth'.format('policy_job')
     mch_path = './{}.pth'.format('policy_mch')
 
-
-
-    '''filepath = 'saved_network'
-    filepath = os.path.join(filepath,'%s'%19)
-    job_path = './{}.pth'.format('policy_job'+str(N_JOBS_N) + '_' + str(N_MACHINES_N) + '_' + str(LOW) + '_' + str(HIGH))
-    mch_path = './{}.pth'.format('policy_mch'+ str(N_JOBS_N) + '_' + str(N_MACHINES_N) + '_' + str(LOW) + '_' + str(HIGH))'''
-
-    job_path = os.path.join(filepath,job_path)
+    job_path = os.path.join(filepath, job_path)
     mch_path = os.path.join(filepath, mch_path)
 
     # Load state dicts with weights_only=True for security
@@ -169,19 +167,16 @@ if __name__ == '__main__':
     result = []
     loade = False
 
-
     for SEED in SEEDs:
-
         mean_makespan = []
-        #np.random.seed(SEED)
         if loade:
             validat_dataset = np.load(file="FJSP_J%sM%s_unew_test_data.npy" % (configs.n_j, configs.n_m))
             print(validat_dataset.shape[0])
         else:
             validat_dataset = FJSPDataset(configs.n_j, configs.n_m, configs.low, configs.high, num_val, SEED)
         valid_loader = DataLoader(validat_dataset, batch_size=batch_size)
-        vali_result = validate(valid_loader,batch_size, ppo.policy_job, ppo.policy_mch)
-        #mean_makespan.append(vali_result)
+        vali_result = validate(valid_loader, batch_size, ppo.policy_job, ppo.policy_mch)
+        
         print("\nValidation Results:")
         print("Individual instance makespans:")
         for i, makespan in enumerate(vali_result, 1):
@@ -189,6 +184,4 @@ if __name__ == '__main__':
         print(f"\nAverage makespan: {np.array(vali_result).mean():.2f}")
         print(f"Best makespan: {np.array(vali_result).min():.2f}")
         print(f"Worst makespan: {np.array(vali_result).max():.2f}")
-
-    # print(min(result))
 
