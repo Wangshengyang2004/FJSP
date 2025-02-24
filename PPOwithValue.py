@@ -383,183 +383,191 @@ def train(rank, world_size):
                             pin_memory=True)
     
     # Initialize log list only on rank 0
-    if rank == 0:
-        log = []
+    log = [] if rank == 0 else None
     
     record = float('inf')
-    for epoch in range(1):  # Single epoch as per original code
-        train_sampler.set_epoch(epoch)  # Important for proper shuffling
-        memory = Memory()
-        ppo.policy_old_job.train()
-        ppo.policy_old_mch.train()
-        
-        times, losses, rewards2, critic_rewards = [], [], [], []
-        start = time.time()
-        
-        costs = []
-        losses, rewards, critic_loss = [], [], []
-        
-        for batch_idx, batch in enumerate(train_loader):
-            env = FJSP(configs.n_j, configs.n_m)
-            data = batch.numpy()
+    try:
+        for epoch in range(1):  # Single epoch as per original code
+            train_sampler.set_epoch(epoch)  # Important for proper shuffling
+            memory = Memory()
+            ppo.policy_old_job.train()
+            ppo.policy_old_mch.train()
+            
+            times, losses, rewards2, critic_rewards = [], [], [], []
+            start = time.time()
+            
+            costs = []
+            losses, rewards, critic_loss = [], [], []
+            
+            for batch_idx, batch in enumerate(train_loader):
+                env = FJSP(configs.n_j, configs.n_m)
+                data = batch.numpy()
 
-            adj, fea, candidate, mask, mask_mch, dur, mch_time, job_time = env.reset(data)
+                adj, fea, candidate, mask, mask_mch, dur, mch_time, job_time = env.reset(data)
 
-            job_log_prob = []
-            mch_log_prob = []
-            r_mb = []
-            done_mb = []
-            first_task = []
-            pretask = []
-            j = 0
-            mch_a = None
-            last_hh = None
-            pool = None
-            ep_rewards = - env.initQuality
-            env_mask_mch = torch.from_numpy(np.copy(mask_mch)).to(self.device)
-            env_dur = torch.from_numpy(np.copy(dur)).float().to(self.device)
-            while True:
+                job_log_prob = []
+                mch_log_prob = []
+                r_mb = []
+                done_mb = []
+                first_task = []
+                pretask = []
+                j = 0
+                mch_a = None
+                last_hh = None
+                pool = None
+                ep_rewards = - env.initQuality
+                env_mask_mch = torch.from_numpy(np.copy(mask_mch)).to(device)
+                env_dur = torch.from_numpy(np.copy(dur)).float().to(device)
+                
+                g_pool_step = g_pool_cal(graph_pool_type=configs.graph_pool_type,
+                                       batch_size=torch.Size(
+                                           [local_batch_size, configs.n_j * configs.n_m, configs.n_j * configs.n_m]),
+                                       n_nodes=configs.n_j * configs.n_m,
+                                       device=device)
+                
+                while True:
+                    env_adj = aggr_obs(deepcopy(adj).to(device).to_sparse(), configs.n_j * configs.n_m)
+                    env_fea = torch.from_numpy(np.copy(fea)).float().to(device)
+                    env_fea = deepcopy(env_fea).reshape(-1, env_fea.size(-1))
+                    env_candidate = torch.from_numpy(np.copy(candidate)).long().to(device)
 
-                env_adj = aggr_obs(deepcopy(adj).to(self.device).to_sparse(), configs.n_j * configs.n_m)
-                env_fea = torch.from_numpy(np.copy(fea)).float().to(self.device)
-                env_fea = deepcopy(env_fea).reshape(-1, env_fea.size(-1))
-                env_candidate = torch.from_numpy(np.copy(candidate)).long().to(self.device)
+                    env_mask = torch.from_numpy(np.copy(mask)).to(device)
+                    env_mch_time = torch.from_numpy(np.copy(mch_time)).float().to(device)
 
-                env_mask = torch.from_numpy(np.copy(mask)).to(self.device)
-                env_mch_time = torch.from_numpy(np.copy(mch_time)).float().to(self.device)
-                # env_job_time = torch.from_numpy(np.copy(job_time)).float().to(device)
+                    action, a_idx, log_a, action_node, _, mask_mch_action, hx = ppo.policy_old_job(x=env_fea,
+                                                                                                   graph_pool=g_pool_step,
+                                                                                                   padded_nei=None,
+                                                                                                   adj=env_adj,
+                                                                                                   candidate=env_candidate,
+                                                                                                   mask=env_mask,
+                                                                                                   mask_mch=env_mask_mch,
+                                                                                                   dur=env_dur,
+                                                                                                   a_index=0,
+                                                                                                   old_action=0,
+                                                                                                   mch_pool=pool)
 
-                action, a_idx, log_a, action_node, _, mask_mch_action, hx = ppo.policy_old_job(x=env_fea,
-                                                                                               graph_pool=g_pool_step,
-                                                                                               padded_nei=None,
-                                                                                               adj=env_adj,
-                                                                                               candidate=env_candidate
-                                                                                               , mask=env_mask
+                    pi_mch, pool = ppo.policy_old_mch(action_node, hx, mask_mch_action, env_mch_time, mch_a, last_hh)
+                    mch_a, log_mch = select_action2(pi_mch)
+                    job_log_prob.append(log_a)
+                    mch_log_prob.append(log_mch)
 
-                                                                                               , mask_mch=env_mask_mch
-                                                                                               , dur=env_dur
-                                                                                               , a_index=0
-                                                                                               , old_action=0
-                                                                                               , mch_pool=pool
-                                                                                               )
+                    memory.mch.append(mch_a)
+                    memory.pre_task.append(pretask)
+                    memory.adj_mb.append(env_adj)
+                    memory.fea_mb.append(env_fea)
+                    memory.candidate_mb.append(env_candidate)
+                    memory.action.append(deepcopy(action))
+                    memory.mask_mb.append(env_mask)
+                    memory.mch_time.append(env_mch_time)
+                    memory.a_mb.append(a_idx)
 
-                pi_mch,pool = ppo.policy_old_mch(action_node, hx, mask_mch_action, env_mch_time,mch_a,last_hh)
-                # print(action,mch_a)
-                mch_a, log_mch = select_action2(pi_mch)
-                job_log_prob.append(log_a)
+                    adj, fea, reward, done, candidate, mask, job, _, mch_time, job_time = env.step(action.cpu().numpy(),
+                                                                                                   mch_a)
+                    ep_rewards += reward
 
-                # print(action[0].item(),mch_a[0].item())
-                mch_log_prob.append(log_mch)
+                    r_mb.append(deepcopy(reward))
+                    done_mb.append(deepcopy(done))
 
-                memory.mch.append(mch_a)
-                memory.pre_task.append(pretask)
-                memory.adj_mb.append(env_adj)
-                memory.fea_mb.append(env_fea)
-                memory.candidate_mb.append(env_candidate)
-                memory.action.append(deepcopy(action))
-                memory.mask_mb.append(env_mask)
-                memory.mch_time.append(env_mch_time)
-                memory.a_mb.append(a_idx)
+                    j += 1
+                    if env.done():
+                        break
 
-                adj, fea, reward, done, candidate, mask, job, _, mch_time, job_time = env.step(action.cpu().numpy(),
-                                                                                               mch_a)
-                ep_rewards += reward
+                memory.dur.append(env_dur)
+                memory.mask_mch.append(env_mask_mch)
+                memory.first_task.append(first_task)
+                memory.job_logprobs.append(job_log_prob)
+                memory.mch_logprobs.append(mch_log_prob)
+                memory.r_mb.append(torch.tensor(r_mb).float().permute(1, 0))
+                memory.done_mb.append(torch.tensor(done_mb).float().permute(1, 0))
+                
+                ep_rewards -= env.posRewards
+                loss, v_loss = ppo.update(memory, epoch)
+                memory.clear_memory()
+                mean_reward = np.mean(ep_rewards)
+                
+                if rank == 0:
+                    log.append([batch_idx, mean_reward])
+                    
+                    if batch_idx % 100 == 0:
+                        file_writing_obj = open(
+                            './' + 'log_' + str(configs.n_j) + '_' + str(configs.n_m) + '_' + str(configs.low) + '_' + str(
+                                configs.high) + '.txt', 'w')
+                        file_writing_obj.write(str(log))
 
-                r_mb.append(deepcopy(reward))
-                done_mb.append(deepcopy(done))
+                rewards.append(np.mean(ep_rewards).item())
+                losses.append(loss)
+                critic_loss.append(v_loss)
 
-                j += 1
-                if env.done():
-                    break
-            memory.dur.append(env_dur)
-            memory.mask_mch.append(env_mask_mch)
-            memory.first_task.append(first_task)
-            memory.job_logprobs.append(job_log_prob)
-            memory.mch_logprobs.append(mch_log_prob)
-            memory.r_mb.append(torch.tensor(r_mb).float().permute(1, 0))
-            memory.done_mb.append(torch.tensor(done_mb).float().permute(1, 0))
-            # -------------------------------------------------------------------------------------
-            ep_rewards -= env.posRewards
-            # -------------------------------------------------------------------------------------
-            loss, v_loss = ppo.update(memory,epoch)
-            memory.clear_memory()
-            mean_reward = np.mean(ep_rewards)
-            log.append([batch_idx, mean_reward])
+                cost = env.mchsEndTimes.max(-1).max(-1)
+                costs.append(cost.mean())
 
+                # Only save models and print progress on rank 0
+                if rank == 0 and (batch_idx + 1) % 20 == 0:
+                    end = time.time()
+                    times.append(end - start)
+                    start = end
+                    mean_loss = np.mean(losses[-20:])
+                    mean_reward = np.mean(costs[-20:])
+                    critic_losss = np.mean(critic_loss[-20:])
 
-            if batch_idx % 100 == 0:
-                file_writing_obj = open(
-                    './' + 'log_' + str(configs.n_j) + '_' + str(configs.n_m) + '_' + str(configs.low) + '_' + str(
-                        configs.high) + '.txt', 'w')
-                file_writing_obj.write(str(log))
-
-            rewards.append(np.mean(ep_rewards).item())
-            losses.append(loss)
-            critic_loss.append(v_loss)
-
-            cost = env.mchsEndTimes.max(-1).max(-1)
-            costs.append(cost.mean())
-            step = 20
-
-            filepath = 'saved_network'
-            if (batch_idx + 1) % step  == 0 :
-                end = time.time()
-                times.append(end - start)
-                start = end
-                mean_loss = np.mean(losses[-step:])
-                mean_reward = np.mean(costs[-step:])
-                critic_losss = np.mean(critic_loss[-step:])
-
-                filename = 'FJSP_{}'.format('J'+str(configs.n_j)+'M'+str(configs.n_m))
-                filepath = os.path.join(filepath, filename)
-                epoch_dir = os.path.join(filepath, '%s_%s' % (100, batch_idx))
-                if not os.path.exists(epoch_dir):
-                    os.makedirs(epoch_dir)
-                job_savePath = os.path.join(epoch_dir, '{}.pth'.format('policy_job'))
-                machine_savePate = os.path.join(epoch_dir, '{}.pth'.format('policy_mch'))
-
-                torch.save(ppo.policy_job.state_dict(), job_savePath)
-                torch.save(ppo.policy_mch.state_dict(), machine_savePate)
-
-                print('  Batch %d/%d, reward: %2.3f, loss: %2.4f,critic_loss:%2.4f,took: %2.4fs' %
-                      (batch_idx, len(train_loader), mean_reward, mean_loss, critic_losss,
-                       times[-1]))
-
-                t4 = time.time()
-                validation_log = validate(valid_loader, configs.batch_size, ppo.policy_job, ppo.policy_mch).mean()
-                if validation_log<record:
-                    epoch_dir = os.path.join(filepath, 'best_value100')
+                    print(f'Rank {rank}, Batch {batch_idx}/{len(train_loader)}, '
+                          f'reward: {mean_reward:.3f}, loss: {mean_loss:.4f}, '
+                          f'critic_loss: {critic_losss:.4f}, took: {times[-1]:.4f}s')
+                    
+                    # Save checkpoints
+                    filepath = 'saved_network'
+                    filename = f'FJSP_J{configs.n_j}M{configs.n_m}'
+                    filepath = os.path.join(filepath, filename)
+                    epoch_dir = os.path.join(filepath, f'{100}_{batch_idx}')
                     if not os.path.exists(epoch_dir):
                         os.makedirs(epoch_dir)
-                    job_savePath = os.path.join(epoch_dir, '{}.pth'.format('policy_job'))
-                    machine_savePate = os.path.join(epoch_dir, '{}.pth'.format('policy_mch'))
-                    torch.save(ppo.policy_job.state_dict(), job_savePath)
-                    torch.save(ppo.policy_mch.state_dict(), machine_savePate)
-                    record = validation_log
+                    
+                    # Save the unwrapped model state dict
+                    torch.save(ppo.policy_job.module.state_dict(), 
+                             os.path.join(epoch_dir, 'policy_job.pth'))
+                    torch.save(ppo.policy_mch.module.state_dict(),
+                             os.path.join(epoch_dir, 'policy_mch.pth'))
 
-                print('The validation quality is:', validation_log)
-                file_writing_obj1 = open(
-                    './' + 'vali_' + str(configs.n_j) + '_' + str(configs.n_m) + '_' + str(configs.low) + '_' + str(
-                        configs.high) + '.txt', 'w')
-                file_writing_obj1.write(str(validation_log))
-                t5 = time.time()
-        np.savetxt('./N_%s_M%s_u100'%(configs.n_j,configs.n_m),costs,delimiter="\n")
+                    # Validation
+                    validation_log = validate(valid_loader, local_batch_size, ppo.policy_job, ppo.policy_mch).mean()
+                    if validation_log < record:
+                        epoch_dir = os.path.join(filepath, 'best_value100')
+                        if not os.path.exists(epoch_dir):
+                            os.makedirs(epoch_dir)
+                        torch.save(ppo.policy_job.module.state_dict(),
+                                 os.path.join(epoch_dir, 'policy_job.pth'))
+                        torch.save(ppo.policy_mch.module.state_dict(),
+                                 os.path.join(epoch_dir, 'policy_mch.pth'))
+                        record = validation_log
+                        print(f'New best validation score: {validation_log}')
 
-    # Wait for all processes to complete
-    dist.barrier()
-    if rank == 0:
-        print(f"Training completed on all {world_size} GPUs")
-    cleanup()
+            if rank == 0:
+                np.savetxt(f'./N_{configs.n_j}_M{configs.n_m}_u100', costs, delimiter="\n")
+
+        # Wait for all processes to complete
+        dist.barrier()
+        if rank == 0:
+            print(f"Training completed on all {world_size} GPUs")
+            
+    except Exception as e:
+        print(f"Error on rank {rank}: {str(e)}")
+        raise e
+    finally:
+        cleanup()
 
 def main(epochs):
     if torch.cuda.is_available():
         n_gpus = torch.cuda.device_count()
         print(f"Found {n_gpus} GPUs!")
         # Launch training processes
-        mp.spawn(train,
-                args=(n_gpus,),
-                nprocs=n_gpus,
-                join=True)
+        try:
+            mp.spawn(train,
+                    args=(n_gpus,),
+                    nprocs=n_gpus,
+                    join=True)
+        except Exception as e:
+            print(f"Error in distributed training: {str(e)}")
+            raise e
     else:
         print("No GPUs available. Running on CPU.")
         train(0, 1)  # Run on CPU
