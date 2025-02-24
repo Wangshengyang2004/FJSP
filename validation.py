@@ -11,7 +11,6 @@ import numpy as np
 import torch
 import matplotlib.pyplot as plt
 from utils.device_utils import get_best_device
-import os
 
 # Get device once at module level
 DEVICE = get_best_device()
@@ -28,10 +27,6 @@ def validate(vali_set,batch_size, policy_jo,policy_mc):
 
             env = FJSP(n_j=configs.n_j, n_m=configs.n_m)
             gantt_chart = DFJSP_GANTT_CHART( configs.n_j, configs.n_m)
-            gantt_chart.output_dir = os.path.join('gantt_charts', f'validation_{i}')
-            if not os.path.exists(gantt_chart.output_dir):
-                os.makedirs(gantt_chart.output_dir)
-                
             g_pool_step = g_pool_cal(graph_pool_type=configs.graph_pool_type,
                                      batch_size=torch.Size(
                                          [batch_size, configs.n_j * configs.n_m, configs.n_j * configs.n_m]),
@@ -129,13 +124,7 @@ if __name__ == '__main__':
     
     print(f"\nUsing device: {DEVICE}")
     
-    # Initialize PPO with correct parameters
-    ppo = PPO(rank=0,  # Use rank 0 for single GPU validation
-              world_size=1,  # Single process validation
-              lr=configs.lr,
-              gamma=configs.gamma,
-              k_epochs=configs.k_epochs,
-              eps_clip=configs.eps_clip,
+    ppo = PPO(configs.lr, configs.gamma, configs.k_epochs, configs.eps_clip,
               n_j=N_JOBS_P,
               n_m=N_MACHINES_P,
               num_layers=configs.num_layers,
@@ -175,8 +164,8 @@ if __name__ == '__main__':
         else:
             validat_dataset = FJSPDataset(configs.n_j, configs.n_m, configs.low, configs.high, num_val, SEED)
         valid_loader = DataLoader(validat_dataset, batch_size=batch_size)
-        vali_result = validate(valid_loader, batch_size, ppo.policy_job, ppo.policy_mch)
-        
+        vali_result = validate(valid_loader,batch_size, ppo.policy_job, ppo.policy_mch)
+        #mean_makespan.append(vali_result)
         print("\nValidation Results:")
         print("Individual instance makespans:")
         for i, makespan in enumerate(vali_result, 1):
@@ -184,4 +173,6 @@ if __name__ == '__main__':
         print(f"\nAverage makespan: {np.array(vali_result).mean():.2f}")
         print(f"Best makespan: {np.array(vali_result).min():.2f}")
         print(f"Worst makespan: {np.array(vali_result).max():.2f}")
+
+    # print(min(result))
 
