@@ -11,6 +11,7 @@ import numpy as np
 import torch
 import matplotlib.pyplot as plt
 from utils.device_utils import get_best_device
+import os
 
 # Get device once at module level
 DEVICE = get_best_device()
@@ -27,6 +28,10 @@ def validate(vali_set,batch_size, policy_jo,policy_mc):
 
             env = FJSP(n_j=configs.n_j, n_m=configs.n_m)
             gantt_chart = DFJSP_GANTT_CHART( configs.n_j, configs.n_m)
+            gantt_chart.output_dir = os.path.join('gantt_charts', f'validation_{i}')
+            if not os.path.exists(gantt_chart.output_dir):
+                os.makedirs(gantt_chart.output_dir)
+                
             g_pool_step = g_pool_cal(graph_pool_type=configs.graph_pool_type,
                                      batch_size=torch.Size(
                                          [batch_size, configs.n_j * configs.n_m, configs.n_j * configs.n_m]),
@@ -75,8 +80,9 @@ def validate(vali_set,batch_size, policy_jo,policy_mc):
 
                 j += 1
                 if env.done():
-                    #plt.savefig("./3020_%s.svg"%i, format='svg',dpi=300, bbox_inches='tight')
-                    #plt.show()
+                    # Save final Gantt chart for this validation instance
+                    final_chart_path = os.path.join(gantt_chart.output_dir, f'final_gantt_{i}.png')
+                    print(f"Saved final Gantt chart for validation instance {i} to {final_chart_path}")
                     break
             cost = env.mchsEndTimes.max(-1).max(-1)
             C_max.append(cost)
