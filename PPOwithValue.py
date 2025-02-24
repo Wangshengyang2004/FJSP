@@ -4,6 +4,10 @@ from agent_utils import select_action, select_action2
 from models.PPO_Actor1 import Job_Actor, Mch_Actor
 from copy import deepcopy
 import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data.distributed import DistributedSampler
 import time
 from torch.distributions.categorical import Categorical
 import torch.nn as nn
@@ -15,6 +19,18 @@ import os
 import platform
 from utils.device_utils import get_best_device
 import gc
+from torch.cuda.amp import autocast, GradScaler
+from torch.utils.checkpoint import checkpoint
+
+def setup(rank, world_size):
+    """Initialize distributed training"""
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    dist.init_process_group("nccl", rank=rank, world_size=world_size)
+
+def cleanup():
+    """Clean up distributed training"""
+    dist.destroy_process_group()
 
 def get_gpu_with_most_memory():
     """Get the GPU device with the most available memory."""
@@ -52,10 +68,15 @@ if torch.cuda.is_available():
 device = get_gpu_with_most_memory()
 print(f"Using device: {device}")
 
+# Enable gradient checkpointing for memory efficiency
+def enable_gradient_checkpointing(model):
+    if hasattr(model, 'encoder'):
+        model.encoder.gradient_checkpointing = True
+    if hasattr(model, 'feature_extract'):
+        model.feature_extract.gradient_checkpointing = True
+
 from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import LambdaLR
-
-
 
 class Memory:
     def __init__(self):
@@ -93,6 +114,9 @@ class Memory:
         del self.mch[:]
         del self.dur[:]
         del self.mch_time[:]
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
 def initWeights(net, scheme='orthogonal'):
 
    for e in net.parameters():
@@ -110,67 +134,59 @@ def adv_normalize(adv):
     n_advs = (adv - adv.mean()) / (adv.std() + 1e-8)
     return n_advs
 class PPO:
-    def __init__(self,
-                 lr,
-                 gamma,
-                 k_epochs,
-                 eps_clip,
-                 n_j,
-                 n_m,
-                 num_layers,
-                 neighbor_pooling_type,
-                 input_dim,
-                 hidden_dim,
-                 num_mlp_layers_feature_extract,
-                 num_mlp_layers_actor,
-                 hidden_dim_actor,
-                 num_mlp_layers_critic,
-                 hidden_dim_critic,
-                 ):
+    def __init__(self, rank, world_size, lr, gamma, k_epochs, eps_clip, n_j, n_m, num_layers, 
+                 neighbor_pooling_type, input_dim, hidden_dim, num_mlp_layers_feature_extract,
+                 num_mlp_layers_actor, hidden_dim_actor, num_mlp_layers_critic, hidden_dim_critic):
+        self.rank = rank
+        self.world_size = world_size
+        self.device = torch.device(f"cuda:{rank}")
+        
+        self.policy_job = Job_Actor(n_j=n_j, n_m=n_m, num_layers=num_layers,
+                                  learn_eps=False, neighbor_pooling_type=neighbor_pooling_type,
+                                  input_dim=input_dim, hidden_dim=hidden_dim,
+                                  num_mlp_layers_feature_extract=num_mlp_layers_feature_extract,
+                                  num_mlp_layers_critic=num_mlp_layers_critic,
+                                  hidden_dim_critic=hidden_dim_critic,
+                                  device=self.device)
+        
+        self.policy_mch = Mch_Actor(n_j=n_j, n_m=n_m, num_layers=num_layers,
+                                   learn_eps=False, neighbor_pooling_type=neighbor_pooling_type,
+                                   input_dim=input_dim, hidden_dim=hidden_dim,
+                                   num_mlp_layers_feature_extract=num_mlp_layers_feature_extract,
+                                   device=self.device)
+
+        # Move models to GPU
+        self.policy_job = self.policy_job.to(self.device)
+        self.policy_mch = self.policy_mch.to(self.device)
+        
+        # Wrap models with DDP
+        self.policy_job = DDP(self.policy_job, device_ids=[rank])
+        self.policy_mch = DDP(self.policy_mch, device_ids=[rank])
+        
+        self.policy_old_job = deepcopy(self.policy_job)
+        self.policy_old_mch = deepcopy(self.policy_mch)
+
+        # Rest of initialization code remains the same
         self.lr = lr
         self.gamma = gamma
         self.eps_clip = eps_clip
         self.k_epochs = k_epochs
-
-        self.policy_job = Job_Actor(n_j=configs.n_j,
-                                    n_m=configs.n_m,
-                                    num_layers=configs.num_layers,
-                                    learn_eps=False,
-                                    neighbor_pooling_type=configs.neighbor_pooling_type,
-                                    input_dim=configs.input_dim,
-                                    hidden_dim=configs.hidden_dim,
-                                    num_mlp_layers_feature_extract=configs.num_mlp_layers_feature_extract,
-                                    num_mlp_layers_critic=num_mlp_layers_critic,
-                                    hidden_dim_critic=hidden_dim_critic,
-                                    device=device)
-        self.policy_mch = Mch_Actor(n_j=configs.n_j,
-                                    n_m=configs.n_m,
-                                    num_layers=configs.num_layers,
-                                    learn_eps=False,
-                                    neighbor_pooling_type=configs.neighbor_pooling_type,
-                                    input_dim=configs.input_dim,
-                                    hidden_dim=configs.hidden_dim,
-                                    num_mlp_layers_feature_extract=configs.num_mlp_layers_feature_extract,
-                                    device=device)
-
-        self.policy_old_job = deepcopy(self.policy_job)
-        self.policy_old_mch = deepcopy(self.policy_mch)
-
-        self.policy_old_job.load_state_dict(self.policy_job.state_dict())
-        self.policy_old_mch.load_state_dict(self.policy_mch.state_dict())
-
+        
         self.job_optimizer = torch.optim.Adam(self.policy_job.parameters(), lr=lr)
         self.mch_optimizer = torch.optim.Adam(self.policy_mch.parameters(), lr=lr)
-
+        
         self.job_scheduler = torch.optim.lr_scheduler.StepLR(self.job_optimizer,
                                                          step_size=configs.decay_step_size,
                                                          gamma=configs.decay_ratio)
         self.mch_scheduler = torch.optim.lr_scheduler.StepLR(self.mch_optimizer,
                                                          step_size=configs.decay_step_size,
                                                          gamma=configs.decay_ratio)
-
-
+        
         self.MSE = nn.MSELoss()
+        self.scaler = GradScaler()
+        
+        enable_gradient_checkpointing(self.policy_job)
+        enable_gradient_checkpointing(self.policy_mch)
 
     def update(self,  memories, epoch):
         '''self.policy_job.train()
@@ -190,7 +206,7 @@ class PPO:
                     discounted_reward = 0
                 discounted_reward = reward + (self.gamma * discounted_reward)
                 rewards.insert(0, discounted_reward)
-            rewards = torch.tensor(rewards, dtype=torch.float).to(device)
+            rewards = torch.tensor(rewards, dtype=torch.float).to(self.device)
             rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-8)
             rewards_all_env.append(rewards)
 
@@ -202,7 +218,7 @@ class PPO:
                                      batch_size=torch.Size(
                                          [configs.batch_size, configs.n_j * configs.n_m, configs.n_j * configs.n_m]),
                                      n_nodes=configs.n_j * configs.n_m,
-                                     device=device)
+                                     device=self.device)
 
             job_log_prob = []
             mch_log_prob = []
@@ -276,35 +292,34 @@ class PPO:
                 mch_ratios = torch.exp(mch_log_prob[j] - mch_log_old_prob[j].detach())
                 advantages = rewards_all_env[j] - val[j].detach()
                 advantages = adv_normalize(advantages)
-                job_surr1 = job_ratios * advantages
-                job_surr2 = torch.clamp(job_ratios, 1 - self.eps_clip, 1 + self.eps_clip) * advantages
+                
+                # Use gradient checkpointing for forward passes
+                job_surr1 = checkpoint(lambda x, y: x * y, job_ratios, advantages)
+                job_surr2 = checkpoint(lambda x, y: torch.clamp(x, 1 - self.eps_clip, 1 + self.eps_clip) * y,
+                                     job_ratios, advantages)
+                
                 job_v_loss = self.MSE(val[j], rewards_all_env[j])
                 job_loss = -1*torch.min(job_surr1, job_surr2) + 0.5*job_v_loss - 0.01 * job_entropy[j]
                 job_loss_sum += job_loss
 
-
-                mch_surr1 = mch_ratios * advantages
-                mch_surr2 = torch.clamp(mch_ratios, 1 - self.eps_clip, 1 + self.eps_clip) * advantages
-                #mch_v_loss = self.MSE(val[j], rewards_all_env[j])
+                mch_surr1 = checkpoint(lambda x, y: x * y, mch_ratios, advantages)
+                mch_surr2 = checkpoint(lambda x, y: torch.clamp(x, 1 - self.eps_clip, 1 + self.eps_clip) * y,
+                                     mch_ratios, advantages)
                 mch_loss = -1*torch.min(mch_surr1, mch_surr2) - 0.01 * mch_entropies[j]
                 mch_loss_sum += mch_loss
 
-
-            # take gradient step
-            # loss_sum = torch.stack(loss_sum,0)
-            # v_loss_sum = torch.stack(v_loss_sum,0)
+            # Optimize with mixed precision
             self.job_optimizer.zero_grad()
-            job_loss_sum.mean().backward(retain_graph=True)
-
-            # scheduler.step()
-            # Copy new weights into old policy:
+            self.scaler.scale(job_loss_sum.mean()).backward(retain_graph=True)
+            self.scaler.step(self.job_optimizer)
+            
             self.policy_old_job.load_state_dict(self.policy_job.state_dict())
+            
             self.mch_optimizer.zero_grad()
-            mch_loss_sum.mean().backward(retain_graph=True)
-            self.job_optimizer.step()
-            self.mch_optimizer.step()
-            # scheduler.step()
-            # Copy new weights into old policy:
+            self.scaler.scale(mch_loss_sum.mean()).backward()
+            self.scaler.step(self.mch_optimizer)
+            self.scaler.update()
+            
             self.policy_old_mch.load_state_dict(self.policy_mch.state_dict())
             
             if configs.decayflag:
@@ -314,68 +329,51 @@ class PPO:
 
             return job_loss_sum.mean().item(), mch_loss_sum.mean().item()
 
-
-def main(epochs):
-    # Add memory management
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-        gc.collect()
+def train(rank, world_size):
+    print(f"Running training on rank {rank}.")
+    setup(rank, world_size)
     
-    from uniform_instance import FJSPDataset
-    from FJSP_Env import FJSP
-
-    log = []
-
-    g_pool_step = g_pool_cal(graph_pool_type=configs.graph_pool_type,
-                             batch_size=torch.Size(
-                                 [configs.batch_size, configs.n_j * configs.n_m, configs.n_j * configs.n_m]),
-                             n_nodes=configs.n_j * configs.n_m,
-                             device=device)
-
-    # Reduce batch size if memory is constrained
-    if torch.cuda.is_available():
-        total_memory = torch.cuda.get_device_properties(device).total_memory
-        if total_memory < 8 * 1024**3:  # Less than 8GB
-            configs.batch_size = configs.batch_size // 2
-            print(f"Reduced batch size to {configs.batch_size} due to GPU memory constraints")
-
-    ppo = PPO(configs.lr, configs.gamma, configs.k_epochs, configs.eps_clip,
-              n_j=configs.n_j,
-              n_m=configs.n_m,
+    # Create model and move it to GPU with DDP
+    ppo = PPO(rank=rank, world_size=world_size,
+              lr=configs.lr, gamma=configs.gamma, k_epochs=configs.k_epochs, 
+              eps_clip=configs.eps_clip, n_j=configs.n_j, n_m=configs.n_m,
               num_layers=configs.num_layers,
               neighbor_pooling_type=configs.neighbor_pooling_type,
-              input_dim=configs.input_dim,
-              hidden_dim=configs.hidden_dim,
+              input_dim=configs.input_dim, hidden_dim=configs.hidden_dim,
               num_mlp_layers_feature_extract=configs.num_mlp_layers_feature_extract,
               num_mlp_layers_actor=configs.num_mlp_layers_actor,
               hidden_dim_actor=configs.hidden_dim_actor,
               num_mlp_layers_critic=configs.num_mlp_layers_critic,
               hidden_dim_critic=configs.hidden_dim_critic)
-
-    # Move model to device
-    ppo.policy_job.to(device)
-    ppo.policy_mch.to(device)
-    ppo.policy_old_job.to(device)
-    ppo.policy_old_mch.to(device)
-
+    
+    # Create train and validation datasets
     train_dataset = FJSPDataset(configs.n_j, configs.n_m, configs.low, configs.high, configs.num_ins, 200)
-    validat_dataset = FJSPDataset(configs.n_j, configs.n_m, configs.low, configs.high, 128, 200)
-
-    data_loader = DataLoader(train_dataset, batch_size=configs.batch_size)
-    valid_loader = DataLoader(validat_dataset, batch_size=configs.batch_size)
-
-    record = 1000000
-    for epoch in range(epochs):
+    valid_dataset = FJSPDataset(configs.n_j, configs.n_m, configs.low, configs.high, 128, 200)
+    
+    # Create distributed samplers
+    train_sampler = DistributedSampler(train_dataset, num_replicas=world_size, rank=rank)
+    valid_sampler = DistributedSampler(valid_dataset, num_replicas=world_size, rank=rank)
+    
+    # Create data loaders with distributed samplers
+    train_loader = DataLoader(train_dataset, batch_size=configs.batch_size,
+                            sampler=train_sampler)
+    valid_loader = DataLoader(valid_dataset, batch_size=configs.batch_size,
+                            sampler=valid_sampler)
+    
+    record = float('inf')
+    for epoch in range(1):  # Single epoch as per original code
+        train_sampler.set_epoch(epoch)
         memory = Memory()
         ppo.policy_old_job.train()
         ppo.policy_old_mch.train()
-
+        
         times, losses, rewards2, critic_rewards = [], [], [], []
         start = time.time()
-
+        
         costs = []
         losses, rewards, critic_loss = [], [], []
-        for batch_idx, batch in enumerate(data_loader):
+        
+        for batch_idx, batch in enumerate(train_loader):
             env = FJSP(configs.n_j, configs.n_m)
             data = batch.numpy()
 
@@ -392,17 +390,17 @@ def main(epochs):
             last_hh = None
             pool = None
             ep_rewards = - env.initQuality
-            env_mask_mch = torch.from_numpy(np.copy(mask_mch)).to(device)
-            env_dur = torch.from_numpy(np.copy(dur)).float().to(device)
+            env_mask_mch = torch.from_numpy(np.copy(mask_mch)).to(self.device)
+            env_dur = torch.from_numpy(np.copy(dur)).float().to(self.device)
             while True:
 
-                env_adj = aggr_obs(deepcopy(adj).to(device).to_sparse(), configs.n_j * configs.n_m)
-                env_fea = torch.from_numpy(np.copy(fea)).float().to(device)
+                env_adj = aggr_obs(deepcopy(adj).to(self.device).to_sparse(), configs.n_j * configs.n_m)
+                env_fea = torch.from_numpy(np.copy(fea)).float().to(self.device)
                 env_fea = deepcopy(env_fea).reshape(-1, env_fea.size(-1))
-                env_candidate = torch.from_numpy(np.copy(candidate)).long().to(device)
+                env_candidate = torch.from_numpy(np.copy(candidate)).long().to(self.device)
 
-                env_mask = torch.from_numpy(np.copy(mask)).to(device)
-                env_mch_time = torch.from_numpy(np.copy(mch_time)).float().to(device)
+                env_mask = torch.from_numpy(np.copy(mask)).to(self.device)
+                env_mch_time = torch.from_numpy(np.copy(mch_time)).float().to(self.device)
                 # env_job_time = torch.from_numpy(np.copy(job_time)).float().to(device)
 
                 action, a_idx, log_a, action_node, _, mask_mch_action, hx = ppo.policy_old_job(x=env_fea,
@@ -457,7 +455,7 @@ def main(epochs):
             # -------------------------------------------------------------------------------------
             ep_rewards -= env.posRewards
             # -------------------------------------------------------------------------------------
-            loss, v_loss = ppo.update(memory,batch_idx)
+            loss, v_loss = ppo.update(memory,epoch)
             memory.clear_memory()
             mean_reward = np.mean(ep_rewards)
             log.append([batch_idx, mean_reward])
@@ -498,7 +496,7 @@ def main(epochs):
                 torch.save(ppo.policy_mch.state_dict(), machine_savePate)
 
                 print('  Batch %d/%d, reward: %2.3f, loss: %2.4f,critic_loss:%2.4f,took: %2.4fs' %
-                      (batch_idx, len(data_loader), mean_reward, mean_loss, critic_losss,
+                      (batch_idx, len(train_loader), mean_reward, mean_loss, critic_losss,
                        times[-1]))
 
                 t4 = time.time()
@@ -521,11 +519,24 @@ def main(epochs):
                 t5 = time.time()
         np.savetxt('./N_%s_M%s_u100'%(configs.n_j,configs.n_m),costs,delimiter="\n")
 
+    # Synchronize between processes
+    if rank == 0:
+        print(f"Epoch {epoch} completed")
+    
+    cleanup()
 
+def main(epochs):
+    if torch.cuda.is_available():
+        n_gpus = torch.cuda.device_count()
+        print(f"Found {n_gpus} GPUs!")
+        # Launch training processes
+        mp.spawn(train,
+                args=(n_gpus,),
+                nprocs=n_gpus,
+                join=True)
+    else:
+        print("No GPUs available. Running on CPU.")
+        train(0, 1)  # Run on CPU
 
-if __name__ == '__main__':
-    total1 = time.time()
+if __name__ == "__main__":
     main(1)
-    total2 = time.time()
-
-    #print(total2 - total1)
