@@ -160,7 +160,7 @@ if __name__ == '__main__':
               hidden_dim_critic=configs.hidden_dim_critic)
 
     filepath = 'saved_network'
-    filepath = os.path.join(filepath, 'FJSP_J%sM%s' % (30,configs.n_m))
+    filepath = os.path.join(filepath, 'FJSP_J%sM%s' % (3,configs.n_m))
     filepath = os.path.join(filepath, 'best_value0')
 
     job_path = './{}.pth'.format('policy_job')
