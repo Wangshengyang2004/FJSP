@@ -12,6 +12,9 @@ import torch
 import matplotlib.pyplot as plt
 from utils.device_utils import get_best_device
 
+# Get device once at module level
+DEVICE = get_best_device()
+
 def validate(vali_set,batch_size, policy_jo,policy_mc):
     policy_job = copy.deepcopy(policy_jo)
     policy_mch = copy.deepcopy(policy_mc)
@@ -24,12 +27,11 @@ def validate(vali_set,batch_size, policy_jo,policy_mc):
 
             env = FJSP(n_j=configs.n_j, n_m=configs.n_m)
             gantt_chart = DFJSP_GANTT_CHART( configs.n_j, configs.n_m)
-            device = get_best_device()
             g_pool_step = g_pool_cal(graph_pool_type=configs.graph_pool_type,
                                      batch_size=torch.Size(
                                          [batch_size, configs.n_j * configs.n_m, configs.n_j * configs.n_m]),
                                      n_nodes=configs.n_j * configs.n_m,
-                                     device=device)
+                                     device=DEVICE)
 
             adj, fea, candidate, mask, mask_mch, dur, mch_time, job_time = env.reset(data)
 
@@ -37,16 +39,16 @@ def validate(vali_set,batch_size, policy_jo,policy_mc):
 
             ep_rewards = - env.initQuality
             rewards = []
-            env_mask_mch = torch.from_numpy(np.copy(mask_mch)).to(device)
-            env_dur = torch.from_numpy(np.copy(dur)).float().to(device)
+            env_mask_mch = torch.from_numpy(np.copy(mask_mch)).to(DEVICE)
+            env_dur = torch.from_numpy(np.copy(dur)).float().to(DEVICE)
             pool=None
             while True:
-                env_adj = aggr_obs(deepcopy(adj).to(device).to_sparse(), configs.n_j * configs.n_m)
-                env_fea = torch.from_numpy(np.copy(fea)).float().to(device)
+                env_adj = aggr_obs(deepcopy(adj).to(DEVICE).to_sparse(), configs.n_j * configs.n_m)
+                env_fea = torch.from_numpy(np.copy(fea)).float().to(DEVICE)
                 env_fea = deepcopy(env_fea).reshape(-1, env_fea.size(-1))
-                env_candidate = torch.from_numpy(np.copy(candidate)).long().to(device)
-                env_mask = torch.from_numpy(np.copy(mask)).to(device)
-                env_mch_time = torch.from_numpy(np.copy(mch_time)).float().to(device)
+                env_candidate = torch.from_numpy(np.copy(candidate)).long().to(DEVICE)
+                env_mask = torch.from_numpy(np.copy(mask)).to(DEVICE)
+                env_mch_time = torch.from_numpy(np.copy(mch_time)).float().to(DEVICE)
                 # env_job_time = torch.from_numpy(np.copy(job_time)).float().to(device)
                 action, a_idx, log_a, action_node, _, mask_mch_action, hx = policy_job(x=env_fea,
                                                                                                graph_pool=g_pool_step,
@@ -118,6 +120,9 @@ if __name__ == '__main__':
     import torch
     import os
     from torch.utils.data import Dataset
+    
+    print(f"\nUsing device: {DEVICE}")
+    
     ppo = PPO(configs.lr, configs.gamma, configs.k_epochs, configs.eps_clip,
               n_j=N_JOBS_P,
               n_m=N_MACHINES_P,
@@ -149,8 +154,9 @@ if __name__ == '__main__':
     job_path = os.path.join(filepath,job_path)
     mch_path = os.path.join(filepath, mch_path)
 
-    ppo.policy_job.load_state_dict(torch.load(job_path))
-    ppo.policy_mch.load_state_dict(torch.load(mch_path))
+    # Load state dicts with weights_only=True for security
+    ppo.policy_job.load_state_dict(torch.load(job_path, weights_only=True))
+    ppo.policy_mch.load_state_dict(torch.load(mch_path, weights_only=True))
     num_val = 10
     batch_size = 1
     SEEDs = [200]
@@ -170,7 +176,13 @@ if __name__ == '__main__':
         valid_loader = DataLoader(validat_dataset, batch_size=batch_size)
         vali_result = validate(valid_loader,batch_size, ppo.policy_job, ppo.policy_mch)
         #mean_makespan.append(vali_result)
-        print(vali_result,np.array(vali_result).mean())
+        print("\nValidation Results:")
+        print("Individual instance makespans:")
+        for i, makespan in enumerate(vali_result, 1):
+            print(f"Instance {i}: {makespan:.2f}")
+        print(f"\nAverage makespan: {np.array(vali_result).mean():.2f}")
+        print(f"Best makespan: {np.array(vali_result).min():.2f}")
+        print(f"Worst makespan: {np.array(vali_result).max():.2f}")
 
     # print(min(result))
 
