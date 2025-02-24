@@ -311,24 +311,25 @@ class DFJSP_GANTT_CHART():
         return colours
     def initialize_plt(self):
         plt.figure(figsize=((self.total_n_job * 1.5, self.number_of_machines)))
-        y_value = list(range(1, 21))
+        # Create list of all machine IDs (1 to number_of_machines)
+        y_value = list(range(1, self.number_of_machines + 1))
 
         plt.xlabel('Makespan', size=20)
         plt.ylabel('Machine ID', size=20)
-        plt.yticks(y_value, size=20)
+        # Set y-ticks to show all machine IDs
+        plt.yticks(y_value, y_value, size=20)
         plt.xticks(size=20)
-
 
     def gantt_plt(self,job, operation, mach_a, start_time, dur_a,number_of_jobs):
         '''
-        绘制甘特图
-        :param job: 工件号
-        :param operation: 工序号
-        :param mach_a: 机器号
-        :param start_time: 开始时间
-        :param dur_a: 加工时间
-        :param colors: 颜色列表
+        Draw Gantt chart
+        :param job: Job ID
+        :param operation: Operation ID
+        :param mach_a: Machine ID
+        :param start_time: Start time
+        :param dur_a: Processing time
+        :param number_of_jobs: Number of jobs
         '''
         colors = self.colour_gen(number_of_jobs)
         plt.barh(mach_a + 1, dur_a, 0.5, left=start_time, color=colors[job])
-        plt.text(start_time + dur_a / 10, mach_a + 0.9, 'J%s\nO%s' % (job + 1, operation + 1), size=6)
+        plt.text(start_time + dur_a / 10, mach_a + 0.9, f'J{job + 1}\nO{operation + 1}', size=6)

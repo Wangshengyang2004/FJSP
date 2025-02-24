@@ -90,7 +90,11 @@ def validate(vali_set,batch_size, policy_jo,policy_mc):
                 if env.done():
                     # Save the Gantt chart with proper styling
                     plt.title(f'Instance {i+1} - Makespan: {env.mchsEndTimes.max(-1).max(-1)[0]:.2f}', pad=20)
-                    plt.grid(True, axis='x', linestyle='--', alpha=0.7)
+                    # Add grid for both x and y axis
+                    plt.grid(True, which='both', axis='both', linestyle='--', alpha=0.7)
+                    # Ensure y-axis shows integer ticks only
+                    ax = plt.gca()
+                    ax.yaxis.set_major_locator(matplotlib.ticker.MaxNLocator(integer=True))
                     plt.tight_layout()
                     plt.savefig(os.path.join(gantt_dir, f'gantt_chart_instance_{i+1}.png'), 
                               format='png', 
