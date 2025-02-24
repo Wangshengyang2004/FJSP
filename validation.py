@@ -130,6 +130,8 @@ if __name__ == '__main__':
     parser.add_argument('--high', type=int, default=99, help='UB of duration')
     parser.add_argument('--seed', type=int, default=200, help='Cap seed for validate set generation')
     parser.add_argument('--n_vali', type=int, default=100, help='validation set size')
+    parser.add_argument('--load_data', action='store_true', help='Load validation data from file instead of generating new data')
+    parser.add_argument('--data_file', type=str, default=None, help='Path to the validation data file (if loading from file)')
     params = parser.parse_args()
 
     N_JOBS_P = params.Pn_j
@@ -161,18 +163,10 @@ if __name__ == '__main__':
 
     filepath = 'saved_network'
     filepath = os.path.join(filepath, 'FJSP_J%sM%s' % (30,configs.n_m))
-    #filepath = os.path.join(filepath, '%s_%s' % (0,239))
     filepath = os.path.join(filepath, 'best_value0')
 
     job_path = './{}.pth'.format('policy_job')
     mch_path = './{}.pth'.format('policy_mch')
-
-
-
-    '''filepath = 'saved_network'
-    filepath = os.path.join(filepath,'%s'%19)
-    job_path = './{}.pth'.format('policy_job'+str(N_JOBS_N) + '_' + str(N_MACHINES_N) + '_' + str(LOW) + '_' + str(HIGH))
-    mch_path = './{}.pth'.format('policy_mch'+ str(N_JOBS_N) + '_' + str(N_MACHINES_N) + '_' + str(LOW) + '_' + str(HIGH))'''
 
     job_path = os.path.join(filepath,job_path)
     mch_path = os.path.join(filepath, mch_path)
@@ -184,21 +178,31 @@ if __name__ == '__main__':
     batch_size = 1
     SEEDs = [200]
     result = []
-    loade = False
-
 
     for SEED in SEEDs:
-
         mean_makespan = []
-        #np.random.seed(SEED)
-        if loade:
-            validat_dataset = np.load(file="FJSP_J%sM%s_unew_test_data.npy" % (configs.n_j, configs.n_m))
-            print(validat_dataset.shape[0])
+        if configs.load_data:
+            if configs.data_file is None:
+                # Use default filename if not specified
+                data_file = f"FJSP_J{configs.n_j}M{configs.n_m}_test_data.npy"
+            else:
+                data_file = configs.data_file
+                
+            print(f"Loading validation data from: {data_file}")
+            try:
+                validat_dataset = np.load(file=data_file)
+                print(f"Loaded dataset with shape: {validat_dataset.shape}")
+            except FileNotFoundError:
+                print(f"Error: Could not find data file {data_file}")
+                print("Falling back to generating new validation dataset...")
+                validat_dataset = FJSPDataset(configs.n_j, configs.n_m, configs.low, configs.high, num_val, SEED)
         else:
+            print("Generating new validation dataset...")
             validat_dataset = FJSPDataset(configs.n_j, configs.n_m, configs.low, configs.high, num_val, SEED)
+        
         valid_loader = DataLoader(validat_dataset, batch_size=batch_size)
         vali_result = validate(valid_loader,batch_size, ppo.policy_job, ppo.policy_mch)
-        #mean_makespan.append(vali_result)
+        
         print("\nValidation Results:")
         print("Individual instance makespans:")
         for i, makespan in enumerate(vali_result, 1):

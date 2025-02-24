@@ -14,6 +14,11 @@ parser.add_argument('--torch_seed', type=int, default=600, help='Seed for torch'
 parser.add_argument('--et_normalize_coef', type=int, default=1000, help='Normalizing constant for feature LBs (end time), normalization way: fea/constant')
 parser.add_argument('--dr_normalize_coef', type=int, default=100, help='Normalizing constant for feature LBs (end time), normalization way: fea/constant')
 parser.add_argument('--wkr_normalize_coef', type=int, default=1, help='Normalizing constant for wkr, normalization way: fea/constant')
+
+# args for validation data loading
+parser.add_argument('--load_data', action='store_true', help='Load validation data from file instead of generating new data')
+parser.add_argument('--data_file', type=str, default=None, help='Path to the validation data file (if loading from file)')
+
 # args for network
 parser.add_argument('--num_layers', type=int, default=3, help='No. of layers of feature extraction GNN including input layer')
 parser.add_argument('--neighbor_pooling_type', type=str, default='average', help='neighbour pooling type')
