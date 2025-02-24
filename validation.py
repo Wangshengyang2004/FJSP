@@ -121,25 +121,23 @@ if __name__ == '__main__':
     import argparse
     from Params import configs
 
-    parser = argparse.ArgumentParser(description='Arguments for ppo_jssp')
-    parser.add_argument('--Pn_j', type=int, default=30, help='Number of jobs of instances to test')
-    parser.add_argument('--Pn_m', type=int, default=20, help='Number of machines instances to test')
-    parser.add_argument('--Nn_j', type=int, default=30, help='Number of jobs on which to be loaded net are trained')
-    parser.add_argument('--Nn_m', type=int, default=20, help='Number of machines on which to be loaded net are trained')
-    parser.add_argument('--low', type=int, default=-99, help='LB of duration')
-    parser.add_argument('--high', type=int, default=99, help='UB of duration')
-    parser.add_argument('--seed', type=int, default=200, help='Cap seed for validate set generation')
-    parser.add_argument('--n_vali', type=int, default=100, help='validation set size')
-    parser.add_argument('--load_data', action='store_true', help='Load validation data from file instead of generating new data')
-    parser.add_argument('--data_file', type=str, default=None, help='Path to the validation data file (if loading from file)')
-    params = parser.parse_args()
+    Pn_j = 5  # Number of jobs of instances to test
+    Pn_m = 3  # Number of machines instances to test
+    Nn_j = 3  # Number of jobs on which to be loaded net are trained
+    Nn_m = 3  # Number of machines on which to be loaded net are trained
+    low = -99  # LB of duration
+    high = 99  # UB of duration
+    seed = 200  # Cap seed for validate set generation
+    n_vali = 100  # Validation set size
+    load_data = True  # Load validation data from file instead of generating new data
+    data_file = "FJSP_J3M3_test_data.npy"  # Path to the validation data file (if loading from file)
 
-    N_JOBS_P = params.Pn_j
-    N_MACHINES_P = params.Pn_m
-    LOW = params.low
-    HIGH = params.high
-    N_JOBS_N = params.Nn_j
-    N_MACHINES_N = params.Nn_m
+    N_JOBS_P = Pn_j
+    N_MACHINES_P = Pn_m
+    LOW = low
+    HIGH = high
+    N_JOBS_N = Nn_j
+    N_MACHINES_N = Nn_m
     from torch.utils.data import DataLoader
     from PPOwithValue import PPO
     import torch
