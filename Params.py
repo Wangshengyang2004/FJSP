@@ -2,8 +2,8 @@ import argparse
 
 parser = argparse.ArgumentParser(description='Arguments for ppo_jssp')
 # args for env
-parser.add_argument('--n_j', type=int, default=3, help='Number of jobs of instance')
-parser.add_argument('--n_m', type=int, default=3, help='Number of machines instance')
+parser.add_argument('--n_j', type=int, default=10, help='Number of jobs of instance')
+parser.add_argument('--n_m', type=int, default=10, help='Number of machines instance')
 parser.add_argument('--rewardscale', type=float, default=0., help='Reward scale for positive rewards')
 parser.add_argument('--init_quality_flag', type=bool, default=False, help='Flag of whether init state quality is 0, True for 0')
 parser.add_argument('--low', type=int, default=-99, help='LB of duration')
@@ -18,6 +18,7 @@ parser.add_argument('--wkr_normalize_coef', type=int, default=1, help='Normalizi
 # args for validation data loading
 parser.add_argument('--load_data', action='store_true', help='Load validation data from file instead of generating new data')
 parser.add_argument('--data_file', type=str, default=None, help='Path to the validation data file (if loading from file)')
+parser.add_argument('--save_data', action='store_true', help='Save generated validation dataset to file')
 
 # args for network
 parser.add_argument('--num_layers', type=int, default=3, help='No. of layers of feature extraction GNN including input layer')

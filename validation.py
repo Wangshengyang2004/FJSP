@@ -121,16 +121,16 @@ if __name__ == '__main__':
     import argparse
     from Params import configs
 
-    Pn_j = 5  # Number of jobs of instances to test
-    Pn_m = 3  # Number of machines instances to test
-    Nn_j = 3  # Number of jobs on which to be loaded net are trained
-    Nn_m = 3  # Number of machines on which to be loaded net are trained
+    Pn_j = 10  # Number of jobs of instances to test
+    Pn_m = 10  # Number of machines instances to test
+    Nn_j = 10  # Number of jobs on which to be loaded net are trained
+    Nn_m = 10  # Number of machines on which to be loaded net are trained
     low = -99  # LB of duration
     high = 99  # UB of duration
     seed = 200  # Cap seed for validate set generation
     n_vali = 100  # Validation set size
-    load_data = True  # Load validation data from file instead of generating new data
-    data_file = "FJSP_J3M3_test_data.npy"  # Path to the validation data file (if loading from file)
+    load_data = False  # Load validation data from file instead of generating new data
+    data_file = "FJSP_J10M10_test_data.npy"  # Path to the validation data file (if loading from file)
 
     N_JOBS_P = Pn_j
     N_MACHINES_P = Pn_m
@@ -160,7 +160,7 @@ if __name__ == '__main__':
               hidden_dim_critic=configs.hidden_dim_critic)
 
     filepath = 'saved_network'
-    filepath = os.path.join(filepath, 'FJSP_J%sM%s' % (3,configs.n_m))
+    filepath = os.path.join(filepath, 'FJSP_J%sM%s' % (10,configs.n_m))
     filepath = os.path.join(filepath, 'best_value0')
 
     job_path = './{}.pth'.format('policy_job')
@@ -197,6 +197,13 @@ if __name__ == '__main__':
         else:
             print("Generating new validation dataset...")
             validat_dataset = FJSPDataset(configs.n_j, configs.n_m, configs.low, configs.high, num_val, SEED)
+            
+            # Save the dataset if requested
+            if configs.save_data:
+                save_file = configs.data_file if configs.data_file else f"FJSP_J{configs.n_j}M{configs.n_m}_test_data.npy"
+                print(f"Saving validation dataset to: {save_file}")
+                np.save(save_file, validat_dataset)
+                print("Dataset saved successfully!")
         
         valid_loader = DataLoader(validat_dataset, batch_size=batch_size)
         vali_result = validate(valid_loader,batch_size, ppo.policy_job, ppo.policy_mch)
