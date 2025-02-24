@@ -161,7 +161,7 @@ if __name__ == '__main__':
 
     filepath = 'saved_network'
     filepath = os.path.join(filepath, 'FJSP_J%sM%s' % (10,configs.n_m))
-    filepath = os.path.join(filepath, 'best_value0')
+    filepath = os.path.join(filepath, 'best_value000')
 
     job_path = './{}.pth'.format('policy_job')
     mch_path = './{}.pth'.format('policy_mch')
