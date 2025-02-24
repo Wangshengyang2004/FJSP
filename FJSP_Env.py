@@ -12,8 +12,6 @@ import random
 import matplotlib.pyplot as plt
 import time
 from min_job_machine_time import min_job_mch,min_mch_job,min_job_mch1
-import os
-
 class FJSP(gym.Env, EzPickle):
     def __init__(self,
                  n_j,
@@ -290,81 +288,47 @@ class FJSP(gym.Env, EzPickle):
 
         self.mask_mch = self.mask_mch.reshape(self.batch_sie,-1,self.mask_mch.shape[-1])
         return self.adj, fea, self.omega, self.mask,self.mask_mch,dur,self.mch_time,self.job_time
-
 class DFJSP_GANTT_CHART():
     def __init__(self,total_n_job,number_of_machines):
         super(DFJSP_GANTT_CHART, self).__init__()
-        
-        # Set non-interactive backend for SSH
-        import matplotlib
-        matplotlib.use('Agg')
-        import matplotlib.pyplot as plt
-        self.plt = plt
 
         self.total_n_job = total_n_job
         self.number_of_machines = number_of_machines
-        self.plot_count = 0  # Counter for unique filenames
-        self.output_dir = 'gantt_charts'  # Directory to save plots
-        
-        # Create output directory if it doesn't exist
-        if not os.path.exists(self.output_dir):
-            os.makedirs(self.output_dir)
-            
         self.initialize_plt()
-
-    def initialize_plt(self):
-        self.plt.figure(figsize=((self.total_n_job * 1.5, self.number_of_machines)))
-        y_value = list(range(1, self.number_of_machines + 1))
-
-        self.plt.xlabel('Makespan', size=20, fontdict={'family': 'SimSun'})
-        self.plt.ylabel('Machine ID', size=20, fontdict={'family': 'SimSun'})
-        self.plt.yticks(y_value, fontproperties='Times New Roman', size=20)
-        self.plt.xticks(fontproperties='Times New Roman', size=20)
-
-    def gantt_plt(self,job, operation, mch_a, start_time, dur_a,number_of_jobs):
-        '''
-        Draw and save Gantt chart
-        :param job: job ID
-        :param operation: operation ID
-        :param mch_a: machine ID
-        :param start_time: start time
-        :param dur_a: processing time
-        :param colors: color list
-        '''
-        colors = self.colour_gen(number_of_jobs)
-        self.plt.barh(mch_a + 1, dur_a, 0.5, left=start_time, color=colors[job])
-        self.plt.text(start_time + dur_a / 10, mch_a + 0.9, f'J{job+1}\nO{operation+1}', size=6)
-        
-        # Save plot if this is the last operation
-        if self.is_last_operation(job, operation):
-            # Generate unique filename
-            filename = f'gantt_chart_{self.plot_count}.png'
-            filepath = os.path.join(self.output_dir, filename)
-            
-            # Save with high DPI and tight layout
-            self.plt.savefig(filepath, format='png', dpi=300, bbox_inches='tight')
-            print(f"Saved Gantt chart to {filepath}")
-            
-            # Clear the current figure and initialize a new one
-            self.plt.clf()
-            self.initialize_plt()
-            self.plot_count += 1
-
-    def is_last_operation(self, job, operation):
-        """Check if this is the last operation of the schedule"""
-        return operation == self.number_of_machines - 1 and job == self.total_n_job - 1
-
     def colour_gen(self,n):
         '''
-        Generate random colors for jobs
-        :param n: number of jobs
-        :return: color list
+        为工件生成随机颜色
+        :param n: 工件数
+        :return: 颜色列表
         '''
         color_bits = ['1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f']
         colours = []
-        random.seed(234)  # Fixed seed for reproducibility
+        random.seed(234)
         for i in range(n):
             colour_bits = ['#']
             colour_bits.extend(random.sample(color_bits, 6))
             colours.append(''.join(colour_bits))
         return colours
+    def initialize_plt(self):
+        plt.figure(figsize=((self.total_n_job * 1.5, self.number_of_machines)))
+        y_value = list(range(1, 21))
+
+        plt.xlabel('Makespan', size=20, fontdict={'family': 'SimSun'})
+        plt.ylabel('机器号', size=20, fontdict={'family': 'SimSun'})
+        plt.yticks(y_value, fontproperties='Times New Roman', size=20)
+        plt.xticks(fontproperties='Times New Roman', size=20)
+
+
+    def gantt_plt(self,job, operation, mach_a, start_time, dur_a,number_of_jobs):
+        '''
+        绘制甘特图
+        :param job: 工件号
+        :param operation: 工序号
+        :param mach_a: 机器号
+        :param start_time: 开始时间
+        :param dur_a: 加工时间
+        :param colors: 颜色列表
+        '''
+        colors = self.colour_gen(number_of_jobs)
+        plt.barh(mach_a + 1, dur_a, 0.5, left=start_time, color=colors[job])
+        plt.text(start_time + dur_a / 10, mach_a + 0.9, 'J%s\nO%s' % (job + 1, operation + 1), size=6)

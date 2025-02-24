@@ -11,6 +11,7 @@ import numpy as np
 import torch
 import matplotlib.pyplot as plt
 from utils.device_utils import get_best_device
+import os
 
 # Get device once at module level
 DEVICE = get_best_device()
@@ -20,13 +21,19 @@ def validate(vali_set,batch_size, policy_jo,policy_mc):
     policy_mch = copy.deepcopy(policy_mc)
     policy_job.eval()
     policy_mch.eval()
+    
+    # Create directory for Gantt charts if it doesn't exist
+    gantt_dir = 'gantt_charts'
+    if not os.path.exists(gantt_dir):
+        os.makedirs(gantt_dir)
+        
     def eval_model_bat(bat,i):
         C_max = []
         with torch.no_grad():
             data = bat.numpy()
 
             env = FJSP(n_j=configs.n_j, n_m=configs.n_m)
-            gantt_chart = DFJSP_GANTT_CHART( configs.n_j, configs.n_m)
+            gantt_chart = DFJSP_GANTT_CHART(configs.n_j, configs.n_m)
             g_pool_step = g_pool_cal(graph_pool_type=configs.graph_pool_type,
                                      batch_size=torch.Size(
                                          [batch_size, configs.n_j * configs.n_m, configs.n_j * configs.n_m]),
@@ -49,7 +56,6 @@ def validate(vali_set,batch_size, policy_jo,policy_mc):
                 env_candidate = torch.from_numpy(np.copy(candidate)).long().to(DEVICE)
                 env_mask = torch.from_numpy(np.copy(mask)).to(DEVICE)
                 env_mch_time = torch.from_numpy(np.copy(mch_time)).float().to(DEVICE)
-                # env_job_time = torch.from_numpy(np.copy(job_time)).float().to(device)
                 action, a_idx, log_a, action_node, _, mask_mch_action, hx = policy_job(x=env_fea,
                                                                                                graph_pool=g_pool_step,
                                                                                                padded_nei=None,
@@ -71,22 +77,22 @@ def validate(vali_set,batch_size, policy_jo,policy_mc):
                 _, mch_a = pi_mch.squeeze(-1).max(1)
 
                 adj, fea, reward, done, candidate, mask,job,_,mch_time,job_time = env.step(action.cpu().numpy(), mch_a,gantt_chart)
-                #rewards += reward
 
                 j += 1
                 if env.done():
-                    # Save final Gantt chart for this validation instance
-                    final_chart_path = os.path.join(gantt_chart.output_dir, f'final_gantt_{i}.png')
-                    print(f"Saved final Gantt chart for validation instance {i} to {final_chart_path}")
+                    # Save the Gantt chart
+                    plt.title(f'Instance {i+1} - Makespan: {env.mchsEndTimes.max(-1).max(-1)[0]:.2f}')
+                    plt.savefig(os.path.join(gantt_dir, f'gantt_chart_instance_{i+1}.png'), 
+                              format='png', 
+                              dpi=300, 
+                              bbox_inches='tight')
+                    plt.close()  # Close the figure to free memory
                     break
             cost = env.mchsEndTimes.max(-1).max(-1)
             C_max.append(cost)
         return torch.tensor(cost)
-    #make_spans.append(rewards - env.posRewards)
-    #print(env.mchsStartTimes,env.mchsEndTimes,env.opIDsOnMchs)
-    #print('REWARD',rewards - env.posRewards)
-    totall_cost = torch.cat([eval_model_bat(bat,i) for i,bat in enumerate(vali_set)], 0)
 
+    totall_cost = torch.cat([eval_model_bat(bat,i) for i,bat in enumerate(vali_set)], 0)
     return totall_cost
 
 
@@ -139,12 +145,20 @@ if __name__ == '__main__':
 
     filepath = 'saved_network'
     filepath = os.path.join(filepath, 'FJSP_J%sM%s' % (30,configs.n_m))
+    #filepath = os.path.join(filepath, '%s_%s' % (0,239))
     filepath = os.path.join(filepath, 'best_value0')
 
     job_path = './{}.pth'.format('policy_job')
     mch_path = './{}.pth'.format('policy_mch')
 
-    job_path = os.path.join(filepath, job_path)
+
+
+    '''filepath = 'saved_network'
+    filepath = os.path.join(filepath,'%s'%19)
+    job_path = './{}.pth'.format('policy_job'+str(N_JOBS_N) + '_' + str(N_MACHINES_N) + '_' + str(LOW) + '_' + str(HIGH))
+    mch_path = './{}.pth'.format('policy_mch'+ str(N_JOBS_N) + '_' + str(N_MACHINES_N) + '_' + str(LOW) + '_' + str(HIGH))'''
+
+    job_path = os.path.join(filepath,job_path)
     mch_path = os.path.join(filepath, mch_path)
 
     # Load state dicts with weights_only=True for security
@@ -156,8 +170,11 @@ if __name__ == '__main__':
     result = []
     loade = False
 
+
     for SEED in SEEDs:
+
         mean_makespan = []
+        #np.random.seed(SEED)
         if loade:
             validat_dataset = np.load(file="FJSP_J%sM%s_unew_test_data.npy" % (configs.n_j, configs.n_m))
             print(validat_dataset.shape[0])
