@@ -15,6 +15,8 @@ import numpy as np
 from Params import configs
 from validation import validate
 from epsGreedyForMch import PredictMch
+from uniform_instance import FJSPDataset
+from FJSP_Env import FJSP
 import os
 import platform
 from utils.device_utils import get_best_device
@@ -27,6 +29,7 @@ def setup(rank, world_size):
     os.environ['MASTER_ADDR'] = 'localhost'
     os.environ['MASTER_PORT'] = '12355'
     dist.init_process_group("nccl", rank=rank, world_size=world_size)
+    torch.cuda.set_device(rank)
 
 def cleanup():
     """Clean up distributed training"""
@@ -333,6 +336,10 @@ def train(rank, world_size):
     print(f"Running training on rank {rank}.")
     setup(rank, world_size)
     
+    # Set device for this process
+    device = torch.device(f"cuda:{rank}")
+    torch.cuda.set_device(device)
+    
     # Create model and move it to GPU with DDP
     ppo = PPO(rank=rank, world_size=world_size,
               lr=configs.lr, gamma=configs.gamma, k_epochs=configs.k_epochs, 
@@ -346,23 +353,42 @@ def train(rank, world_size):
               num_mlp_layers_critic=configs.num_mlp_layers_critic,
               hidden_dim_critic=configs.hidden_dim_critic)
     
+    # Adjust batch size for distributed training
+    local_batch_size = configs.batch_size // world_size
+    if local_batch_size == 0:
+        local_batch_size = 1
+    
     # Create train and validation datasets
     train_dataset = FJSPDataset(configs.n_j, configs.n_m, configs.low, configs.high, configs.num_ins, 200)
     valid_dataset = FJSPDataset(configs.n_j, configs.n_m, configs.low, configs.high, 128, 200)
     
     # Create distributed samplers
-    train_sampler = DistributedSampler(train_dataset, num_replicas=world_size, rank=rank)
-    valid_sampler = DistributedSampler(valid_dataset, num_replicas=world_size, rank=rank)
+    train_sampler = DistributedSampler(train_dataset, 
+                                      num_replicas=world_size,
+                                      rank=rank,
+                                      shuffle=True)
+    valid_sampler = DistributedSampler(valid_dataset,
+                                      num_replicas=world_size,
+                                      rank=rank,
+                                      shuffle=False)
     
     # Create data loaders with distributed samplers
-    train_loader = DataLoader(train_dataset, batch_size=configs.batch_size,
-                            sampler=train_sampler)
-    valid_loader = DataLoader(valid_dataset, batch_size=configs.batch_size,
-                            sampler=valid_sampler)
+    train_loader = DataLoader(train_dataset, 
+                            batch_size=local_batch_size,
+                            sampler=train_sampler,
+                            pin_memory=True)
+    valid_loader = DataLoader(valid_dataset,
+                            batch_size=local_batch_size,
+                            sampler=valid_sampler,
+                            pin_memory=True)
+    
+    # Initialize log list only on rank 0
+    if rank == 0:
+        log = []
     
     record = float('inf')
     for epoch in range(1):  # Single epoch as per original code
-        train_sampler.set_epoch(epoch)
+        train_sampler.set_epoch(epoch)  # Important for proper shuffling
         memory = Memory()
         ppo.policy_old_job.train()
         ppo.policy_old_mch.train()
@@ -519,10 +545,10 @@ def train(rank, world_size):
                 t5 = time.time()
         np.savetxt('./N_%s_M%s_u100'%(configs.n_j,configs.n_m),costs,delimiter="\n")
 
-    # Synchronize between processes
+    # Wait for all processes to complete
+    dist.barrier()
     if rank == 0:
-        print(f"Epoch {epoch} completed")
-    
+        print(f"Training completed on all {world_size} GPUs")
     cleanup()
 
 def main(epochs):
@@ -539,4 +565,6 @@ def main(epochs):
         train(0, 1)  # Run on CPU
 
 if __name__ == "__main__":
+    # Fix GradScaler deprecation warning
+    torch.multiprocessing.set_start_method('spawn')
     main(1)
